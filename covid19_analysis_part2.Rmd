@@ -1,0 +1,455 @@
+---
+title: "COVID 19 Analysis -- Part 2"
+author: "Meisam Yousefi"
+date: "2023-03-23"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+#### Required Packages
+
+```{r setup, include=FALSE}
+library(tidyverse, quietly = TRUE)
+library(lubridate, quietly = TRUE)
+library(usmap, quietly = TRUE)
+library(zoo, quietly = TRUE)
+```
+
+#### Part 1 - Basic Exploration of US Data
+
+The New York Times (the Times) has aggregated reported COVID-19 data from state and local governments and health departments since 2020 and provides public access through a repository on GitHub. One of the data sets provided by the Times is county-level data for cumulative cases and deaths each day. This will be your primary data set for the first two parts of your analysis. 
+
+County-level COVID data from 2020, 2021, and 2022 has been imported below. Each row of data reports the cumulative number of cases and deaths for a specific county each day. A FIPS code, a standard geographic identifier, is also provided which you will use in Part 2 to construct a map visualization at the county level for a state. 
+
+Additionally, county-level population estimates reported by the US Census Bureau has been imported as well. You will use these estimates to caluclate statistics per 100,000 people. 
+
+```{r import-nyt-data}
+# Import New York Times COVID-19 data
+# Import Population Estimates from US Census Bureau 
+
+us_counties_2020 <- read_csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties-2020.csv")
+us_counties_2021 <- read_csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties-2021.csv")
+us_counties_2022 <- read_csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties-2022.csv")
+
+us_population_estimates <- read_csv("fips_population_estimates.csv")
+```
+
+##### Question 1 
+
+Your first task is to combine and tidy the 2020, 2021, and 2022 COVID data sets and find the total deaths and cases for each day since March 15, 2020 (2020-03-15). The data sets provided from the NY Times also includes statistics from Puerto Rico, a US territory. You may remove these observations from the data as they will not be needed for your analysis. Once you have tidied the data, find the total COVID-19 cases and deaths since March 15, 2020. Write a sentence or two after the code block communicating your results. Use inline code to include the `max_date`, `us_total_cases`, and `us_total_deaths` variables. To write inline code use `r `. 
+
+##### Answer 1
+
+```{r p1q1-response-part1}
+
+# Combine the three 2020, 2021, and 2022 COVID data sets using rbind
+
+us_counties_total <- rbind(us_counties_2020, us_counties_2021, us_counties_2022)
+
+# Removing "Puerto Rico" from the states list, and removing dates prior to March 15th 2020
+
+us_counties_total <- us_counties_total %>% dplyr::filter(state != "Puerto Rico",
+                                                         date > "2020-03-14")
+
+# Summarizing data for total death and cases, per day
+
+us_combined_total <- us_counties_total %>%
+  group_by(date) %>%
+  summarise("total_deaths" = sum(deaths),
+            "total_cases" = sum(cases))
+
+# Calculating values for the communication part
+
+max_date <- max(us_combined_total$date) # replace the quotes with your code to find the most recent date in the data set
+us_total_cases <- us_combined_total$total_cases[us_combined_total$date == max_date]
+us_total_deaths <- us_combined_total$total_deaths[us_combined_total$date == max_date]
+```
+
+Displaying the output final table:
+
+```{r p1q1-sample}
+us_combined_total
+```
+
+As of `r format(max_date, "%B %d, %Y")`, there has been a cumulative number of `r us_total_cases` individuals in the US who were diagnosed with COVID-19, and there has been `r us_total_deaths` deaths reported.
+
+In this analysis we used the data from NYTimes on the daily number of cases and deaths in each county, from the begining of the pandemic until `r max_date`.
+
+##### Question 2 
+
+Create a visualization for the total number of deaths and cases in the US since March 15, 2020. Before you create your visualization, review the types of plots you can create using the ggplot2 library and think about which plots would be effective in communicating your results. After you have created your visualization, write a few sentences describing your visualization. How could the plot be interpreted? Could it be misleading? 
+
+##### Answer 2 
+
+I'll present the data with a simple line-graph, with two separate lines one for the total number of deaths and the other for the total number of cases. To do so we might want to first pivot the table to the long format.
+
+```{r p1q2-response-part1}
+
+us_combined_total %>% 
+  pivot_longer(cols = -date, names_to = "type", values_to = "number") %>%
+  ggplot(aes(x = date, y = number)) + geom_line(aes(color = type)) + labs(title = "Cumulative number of COVID-19 cases and deaths in the US")
+
+```
+
+The plot is effective in communicating the message and for the audience to get a grasp of the COVID-19 situation in the states until the end of the 2022, however there is probably one point which might be misleading: Since the actual number of the cases is orders of magnitude higher than the death, the death line seems to be static from this plot so the audience might think that the rate of the cases is getting higher than the deaths. We can overcome this by converting all numbers to log transformed:
+
+```{r p1q2-response-part2}
+
+us_combined_total %>% 
+  pivot_longer(cols = -date, names_to = "type", values_to = "number") %>%
+  mutate(number_log10 = log10(number)) %>%
+  ggplot(aes(x = date, y = number_log10)) + geom_line(aes(color = type)) + labs(title = "Cumulative number of COVID-19 cases and deaths in the US")
+
+```
+
+Now we can clearly see that the cumulative number of the deaths from COVID-19 is almost always 2 log lower than the total number of the cases, which brings us to an almost 1% chance of death from COVID-19 which was not growing as the pandemic progressed.
+
+##### Question 3
+
+While it is important to know the total deaths and cases throughout the COVID-19 pandemic, it is also important for local and state health officials to know the the number of new cases and deaths each day to understand how rapidly the virus is spreading. Using the table you created in Question 1, calculate the number of new deaths and cases each day and a seven-day average of new deaths and cases. Once you have organized your data, find the days that saw the largest number of new cases and deaths. Write a sentence or two after the code block communicating your results.
+
+##### Answer 3 
+
+```{r p1q3-response-part1}
+
+# Calculating the number of new deaths and cases each day and a seven day average of new deaths and cases
+
+us_combined_2 <- us_combined_total %>% mutate(
+  delta_deaths_1 = total_deaths - lag(total_deaths),
+  delta_cases_1 = total_cases - lag(total_cases),
+  delta_deaths_7 = zoo::rollmean(delta_deaths_1, k = 7, fill = NA, align = "right"),
+  delta_cases_7 = zoo::rollmean(delta_cases_1, k = 7, fill = NA, align = "right")
+)
+
+us_combined_2 
+```
+
+```{r p1q3-response-part2}
+
+# Finding the days with the highest number of new cases and deaths
+
+max_new_cases_date <- us_combined_2$date[us_combined_2$delta_cases_1 == max(us_combined_2$delta_cases_1, na.rm = T)]
+
+max_new_deaths_date <- us_combined_2$date[us_combined_2$delta_deaths_1 == max(us_combined_2$delta_deaths_1, na.rm = T)]
+```
+
+We can see that the pandemic has not been less severe in 2022, as the highest daily number of new confirmed cases belongs to `r max_new_cases_date[2]`, and the highest number of deaths happened on `r max_new_deaths_date` with `r max(us_combined_2$delta_deaths_1, na.rm = T)` individuals died on that day.
+
+##### Question 4
+
+Create a new table, based on the table from Question 3, and calculate the number of new deaths and cases per 100,000 people each day and a seven day average of new deaths and cases per 100,000 people. 
+
+```{r p1q4-response}
+
+# Calculate the US total population in 2020, 2021 and 2022. Since the "population estimates" were only available for 2020 and 2021, I extrapolated the total population in 2022 assuming a linear rate
+
+us_population_total <- us_population_estimates %>% group_by(Year) %>% summarise(Population = sum(Estimate))
+
+us_population_total <- rbind(us_population_total, c(2022, 2*(us_population_total$Population[2]) - us_population_total$Population[1]))
+
+# Dividing each statistics by the total population and then multiplying by 100,000
+
+us_combined_3 <- us_combined_2 %>% 
+  mutate(across(-date, ~ case_when(date < "2021-01-01" ~ (.x*100000)/us_population_total$Population[us_population_total$Year == "2020"],
+                                   date >= "2021-01-01" &  date < "2022-01-01" ~ (.x*100000)/us_population_total$Population[us_population_total$Year == "2021"],
+                                   date >= "2022-01-01" ~ (.x*100000)/us_population_total$Population[us_population_total$Year == "2022"])
+  ))
+
+us_combined_3
+```
+
+#### Question 5
+
+Create a visualization to compare the seven-day average cases and deaths per 100,000 people
+
+#### Answer 5
+
+```{r p1q5-response}
+
+us_combined_3 %>% 
+  pivot_longer(cols = ends_with("7"), names_to = "type", values_to = "number") %>%
+  mutate(number_log10 = log10(number)) %>%
+  ggplot(aes(x = date, y = number_log10)) + geom_line(aes(color = type)) + labs(title = "Seven day averages of COVID-19 cases and deaths per 100,000 population in the US")
+
+```
+
+By this we can see that again, the pattern of the COVID-19 cases and deaths are similar, with several waves of the pandemic from early 2020 until the end of 2022. However, notably, while the highest weekly average of case diagnosis is in early 2022, we see that the pick deaths belong to the early 2021 which probably shows the impact of vaccination programs on us national COVID-19 burden.
+
+##### Part 2 - US State Comparison
+
+While understanding the trends on a national level can be helpful in understanding how COVID-19 impacted the United States, it is important to remember that the virus arrived in the United States at different times. For the next part of your analysis, you will begin to look at COVID related deaths and cases at the state and county-levels.
+
+##### Question 1
+
+Your first task in Part 2 is to determine the top 10 states in terms of total deaths and cases between March 15, 2020, and December 31, 2021.
+
+Once you have both lists, briefly describe your methodology and your results.
+
+#### Answer 1
+
+```{r p2q1-response}
+
+# Determine the top 10 states in terms of total deaths and cases between March 15, 2020, and December 31, 2021. To do this, transform your combined COVID-19 data to summarize total deaths and cases by state up to December 31, 2021. 
+
+us_counties_DEC2021 <- us_counties_total %>% 
+  filter(date == "2021-12-31") %>%
+  group_by(state, date) %>%
+  summarise(total_deaths = sum(deaths),
+            total_cases = sum(cases)) %>%
+  arrange(desc(total_cases))
+
+us_counties_DEC2021
+```
+
+Since our original data is cumulative sum, to find the total cases and deaths till the end of 2021 is to filter the date "2021-12-31". Then we summarise all the counties by the states.
+
+##### Question 2
+
+Determine the top 10 states in terms of deaths per 100,000 people and cases per 100,000 people between March 15, 2020, and December 31, 2021.
+
+Once you have both lists, briefly describe your methodology and your results. Do you expect the lists to be different than the one produced in Question 1? Which method, total or per 100,000 people, is a better method for reporting the statistics? 
+
+```{r p2q2-response}
+
+# Determining state wise total population in year 2021
+us_counties_estimates <- us_population_estimates %>% group_by(STNAME, Year) %>% summarise(population = sum(Estimate)) %>% filter(Year == 2021)
+
+# Calculating deaths and cases per 100000 individulas per state, and ranking based on most cases per 100000 population
+us_counties_2 <- us_counties_DEC2021 %>% 
+  full_join(us_counties_estimates, by = c('state' = 'STNAME')) %>% 
+  mutate(deaths_per_100k = 100000*(total_deaths/population),
+         cases_per_100k = 100000*(total_cases/population)) %>%
+  dplyr::select(state, date, deaths_per_100k, cases_per_100k) %>%
+  arrange(desc(cases_per_100k))
+
+```
+
+```{r p2q2-sample}
+
+# Output
+us_counties_2
+```
+
+We see that North Dakota has had the most number of cases per 100,000 population among all states, until the end of 2022
+
+##### Question 3
+
+Now, select a state and calculate the seven-day averages for new cases and deaths per 100,000 people. Once you have calculated the averages, create a visualization using ggplot2 to represent the data. 
+
+```{r p2q3-response}
+
+# Selecting the state of choice
+stateName = "Colorado"
+
+# Determining total population in year 2020 and 2021
+state_estimates <- us_population_estimates %>% 
+  filter(STNAME == stateName) %>% 
+  group_by(Year) %>% 
+  summarise(population = sum(Estimate))
+
+# Calculating the 7-day average of total death and cases in the state, per 100,000 individuals
+state_estimates_2 <- us_counties_total %>% 
+  filter(state == stateName) %>% 
+  group_by(date) %>% 
+  summarise("total_deaths" = sum(deaths),
+            "total_cases" = sum(cases)) %>%
+  mutate(
+    population = case_when(date < base::as.Date('2021-01-01') ~ state_estimates$population[state_estimates$Year == 2020],
+                           date >= base::as.Date('2021-01-01') ~ state_estimates$population[state_estimates$Year == 2021])
+    ) %>%
+  mutate(
+    deaths_per_100k = 100000*(total_deaths / population),
+    cases_per_100k = 100000*(total_cases / population),
+    deaths_7_day = 100000*(((total_deaths - lag(total_deaths, 7)) / 7) / population),
+    cases_7_day = 100000*(((total_cases - lag(total_cases, 7)) / 7) / population)
+  )
+
+state_estimates_2
+```
+
+```{r p2q3-sample}
+
+# Output
+
+state_estimates_2 %>% 
+  na.omit() %>%
+  pivot_longer(cols = ends_with("day"), names_to = "type", values_to = "number") %>%
+  ggplot(aes(x = date, y = number)) + geom_line(aes(color = type)) + labs(title = str_c("Seven day averages of COVID-19 cases and deaths per 100,000 population in the state of", stateName))
+```
+
+By changing the `stateName` variable we can repeat the analysis for any desired states.
+
+##### Question 4
+
+Using the same state, identify the top 5 counties in terms of deaths and cases per 100,000 people. 
+
+```{r p2q4-response}
+
+# Determining total population of counties
+state_estimates <- us_population_estimates %>% 
+  filter(STNAME == stateName, Year == 2021) %>% dplyr::select(fips, Estimate)
+
+# Total number of cases and deaths in each county
+state_counties <- us_counties_total %>% 
+  filter(state == stateName, date == base::as.Date('2022-12-31')) %>% 
+  mutate(fips = as.numeric(fips))
+
+# Merging the two datasets to calculate the per 100,000 number of cases and daths in each county
+state_counties_per100k <- state_estimates %>% 
+  full_join(state_counties, by = c("fips")) %>%
+  mutate(
+    deaths_per_100k = 100000*(deaths / Estimate),
+    cases_per_100k = 100000*(cases / Estimate)) %>%
+  dplyr::select(county, date, fips, state, cases, deaths, cases_per_100k, deaths_per_100k)
+
+state_counties_per100k %>% arrange(desc(deaths_per_100k))
+
+```
+
+Top county in Colorado in terms of total cases per 100,000 population is "Crowley"
+Top county in Colorado in terms of total cases per 100,000 population is "Bent"
+
+##### Question 5
+
+Modify the code below for the map projection to plot county-level deaths and cases per 100,000 people for your state. 
+
+```{r p2q5-response}
+
+plot_usmap(regions = "counties", include="CO", data = state_counties_per100k, values = "deaths_per_100k", color = "blue") +
+  scale_fill_continuous(low = "white", high = "blue", name = "Deaths per 100,000")
+
+```
+
+##### Question 6
+
+Finally, select three other states and calculate the seven-day averages for new deaths and cases per 100,000 people for between March 15, 2020, and December 31, 2021. 
+
+
+```{r p2q6-response}
+
+# Selecting the state of choice
+stateName = "Michigan"
+
+# Determining total population in year 2020 and 2021
+state_estimates <- us_population_estimates %>% 
+  filter(STNAME == stateName) %>% 
+  group_by(Year) %>% 
+  summarise(population = sum(Estimate))
+
+# Calculating the 7-day average of total death and cases in the state, per 100,000 individuals
+MI_estimates <- us_counties_total %>% 
+  filter(state == stateName) %>% 
+  group_by(date) %>% 
+  summarise("total_deaths" = sum(deaths),
+            "total_cases" = sum(cases)) %>%
+  mutate(
+    population = case_when(date < base::as.Date('2021-01-01') ~ state_estimates$population[state_estimates$Year == 2020],
+                           date >= base::as.Date('2021-01-01') ~ state_estimates$population[state_estimates$Year == 2021])
+    ) %>%
+  mutate(
+    deaths_per_100k = 100000*(total_deaths / population),
+    cases_per_100k = 100000*(total_cases / population),
+    deaths_7_day = 100000*(((total_deaths - lag(total_deaths, 7)) / 7) / population),
+    cases_7_day = 100000*(((total_cases - lag(total_cases, 7)) / 7) / population)
+  )
+
+
+# Selecting the state of choice
+stateName = "Montana"
+
+# Determining total population in year 2020 and 2021
+state_estimates <- us_population_estimates %>% 
+  filter(STNAME == stateName) %>% 
+  group_by(Year) %>% 
+  summarise(population = sum(Estimate))
+
+# Calculating the 7-day average of total death and cases in the state, per 100,000 individuals
+MO_estimates <- us_counties_total %>% 
+  filter(state == stateName) %>% 
+  group_by(date) %>% 
+  summarise("total_deaths" = sum(deaths),
+            "total_cases" = sum(cases)) %>%
+  mutate(
+    population = case_when(date < base::as.Date('2021-01-01') ~ state_estimates$population[state_estimates$Year == 2020],
+                           date >= base::as.Date('2021-01-01') ~ state_estimates$population[state_estimates$Year == 2021])
+    ) %>%
+  mutate(
+    deaths_per_100k = 100000*(total_deaths / population),
+    cases_per_100k = 100000*(total_cases / population),
+    deaths_7_day = 100000*(((total_deaths - lag(total_deaths, 7)) / 7) / population),
+    cases_7_day = 100000*(((total_cases - lag(total_cases, 7)) / 7) / population)
+  )
+
+
+# Selecting the state of choice
+stateName = "Illinois"
+
+# Determining total population in year 2020 and 2021
+state_estimates <- us_population_estimates %>% 
+  filter(STNAME == stateName) %>% 
+  group_by(Year) %>% 
+  summarise(population = sum(Estimate))
+
+# Calculating the 7-day average of total death and cases in the state, per 100,000 individuals
+IL_estimates <- us_counties_total %>% 
+  filter(state == stateName) %>% 
+  group_by(date) %>% 
+  summarise("total_deaths" = sum(deaths),
+            "total_cases" = sum(cases)) %>%
+  mutate(
+    population = case_when(date < base::as.Date('2021-01-01') ~ state_estimates$population[state_estimates$Year == 2020],
+                           date >= base::as.Date('2021-01-01') ~ state_estimates$population[state_estimates$Year == 2021])
+    ) %>%
+  mutate(
+    deaths_per_100k = 100000*(total_deaths / population),
+    cases_per_100k = 100000*(total_cases / population),
+    deaths_7_day = 100000*(((total_deaths - lag(total_deaths, 7)) / 7) / population),
+    cases_7_day = 100000*(((total_cases - lag(total_cases, 7)) / 7) / population)
+  )
+```
+
+We calculated the 7-day average of toatl deaths and cases in Illinois (IL), Michigan (MI), and Montana (MO)
+
+```{r}
+IL_estimates
+```
+
+```{r}
+MI_estimates
+```
+
+```{r}
+MO_estimates
+```
+
+##### Question 7
+
+Create a visualization comparing the seven-day averages for new deaths and cases per 100,000 people for the four states you selected. 
+
+```{r p2q7-response}
+CO <- state_estimates_2 %>% dplyr::select(date, deaths_7_day, cases_7_day) %>% rename(CO_deaths = deaths_7_day, CO_cases = cases_7_day)
+IL <- IL_estimates %>% dplyr::select(date, deaths_7_day, cases_7_day) %>% rename(IL_deaths = deaths_7_day, IL_cases = cases_7_day)
+MI <- MI_estimates %>% dplyr::select(date, deaths_7_day, cases_7_day) %>% rename(MI_deaths = deaths_7_day, MI_cases = cases_7_day)
+MO <- MO_estimates %>% dplyr::select(date, deaths_7_day, cases_7_day) %>% rename(MO_deaths = deaths_7_day, MO_cases = cases_7_day)
+
+# Merging data for 4 states
+four_states_avg <- reduce(list(CO, IL, MI, MO), inner_join, by = "date") %>% na.omit()
+
+# Tidying up the data frame by pivot longer
+four_states_avg <- four_states_avg %>%
+  pivot_longer(-date, 
+               names_to = c("state", ".value"), 
+               names_sep="_" ) %>%
+  pivot_longer(c("deaths", "cases"), names_to = "Var", values_to = "Count") %>%
+  mutate(Count = log10(Count))
+
+# Plotting
+ggplot(four_states_avg) + geom_line(aes(x = date, y = Count, group = interaction(state, Var), color = state, linetype = Var))
+
+```
+
+We can see that for all of the states we see a more or less similar trend of rise/drops in number of cases and deaths.
+
+#### END of part2
