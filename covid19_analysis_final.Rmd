@@ -5,6 +5,7 @@ date: "2023-03-06"
 output:
   html_document:
     df_print: paged
+  pdf_document: default
 ---
 
 #### Required Packages
@@ -471,39 +472,47 @@ Using the state you selected in Part 2 Question 2 compare the daily number of ca
 
 ```{r p3q1-response}
 
-# To compare your state data between the two data sets, you will first need to tidy the US CSSE death and cases data.
-# Hint: Review the documentation for pivot_longer().
+# Tidy up the US CSSE death and cases data
+tmpCasesCO <- csse_us_cases %>% 
+  filter(Province_State == "Colorado") %>%
+  pivot_longer(cols = -1:-11, names_to = "date", values_to = "cases") %>%
+  mutate(date = base::as.Date(date, format = "%m/%d/%y")) %>%
+  select(FIPS, Admin2, Province_State, date, cases)
 
+tmpDeathsCO <- csse_us_deaths %>% 
+  filter(Province_State == "Colorado") %>%
+  pivot_longer(cols = -1:-11, names_to = "date", values_to = "deaths") %>%
+  mutate(date = base::as.Date(date, format = "%m/%d/%y")) %>%
+  select(FIPS, Admin2, Province_State, date, deaths)
 
-# Once you have tidied your data, join the two CSSE US data sets to include cases and deaths in one table. 
+# Join the two CSSE US data sets to include cases and deaths in one table
+csse_CO <- full_join(tmpCasesCO, tmpDeathsCO, by = c("FIPS", "Admin2", "Province_State", "date")) %>% filter(date > '2020-03-14') %>%
+  rename(fips = FIPS, county = Admin2, state = Province_State)
 
-
-# Finally, create two visualizations with one plotting the CSSE and NY Times cases and the other plotting the CSEE and NY Times deaths.
-
+csse_CO
 ```
 
-```{r p3q1-sample}
+```{r p3q1-1}
+library(cowplot)
 
-# Your tidied CSSE data for your selected state should look similar to the following tibble:
-#
-# A tibble: 43,362 × 6
-#     fips  county  state        date      cases  deaths
-#     <dbl> <chr>   <chr>       <date>     <dbl>  <dbl>
-#  1  8001  Adams  Colorado   2020-03-15     6      0
-#  2  8001  Adams  Colorado   2020-03-16     8      0
-#  3  8001  Adams  Colorado   2020-03-17    10      0
-#  4  8001  Adams  Colorado   2020-03-18    10      0
-#  5  8001  Adams  Colorado   2020-03-19    10      0
-#  6  8001  Adams  Colorado   2020-03-20    12      0
-#  7  8001  Adams  Colorado   2020-03-21    14      0
-#  8  8001  Adams  Colorado   2020-03-22    18      0
-#  9  8001  Adams  Colorado   2020-03-23    25      0
-# 10  8001  Adams  Colorado   2020-03-24    27      0
-# … with 43,352 more rows
+# visualizing the Colorado plot from CSSE data
+p1 <- csse_CO %>% 
+  group_by(date) %>%
+  summarise(cases_csse = sum(cases), deaths_csse = sum(deaths)) %>%
+  pivot_longer(c(cases_csse, deaths_csse), names_to = "type", values_to = "counts") %>%
+  mutate(countsLog10 = log10(counts)) %>%
+  ggplot() + geom_line(aes(x = date, y = countsLog10, color = type))
 
+# visualizing the Colorado plot from NYT data
+p2 <- state_estimates_2 %>% 
+  pivot_longer(c(total_cases, total_deaths), names_to = "type", values_to = "counts") %>%
+  mutate(countsLog10 = log10(counts)) %>%
+  ggplot() + geom_line(aes(x = date, y = countsLog10, color = type))
+
+plot_grid(p1, p2, labels = c("CSSE", "NYT"), nrow = 1)
 ```
 
--- Communicate your methodology, results, and interpretation here -- 
+The two datasets are quite similar --> good to use
 
 ##### Question 2 
 
@@ -511,23 +520,66 @@ Now that you have verified the data reported from the CSSE and NY Times are simi
 
 ```{r p3q2-response}
 
-# First, combine and tidy the CSSE death and cases data sets. You may wish to keep the two sets separate.
-# Then, tidy the global population estimates. While tidying your data, remember to include columns that you will be able to use when joining the COVID-19 data. 
-# You will notice that the population estimates data does not include every country reported in the CSSE data. When calculating statistics per 100,000 people, you will need to filter the CSSE data to only include countries that you have population estimates for. 
+# Tidying up US and global total number for "Cases"
+tmpCasesGlobal <- csse_global_cases[, c("Country/Region", "12/31/21")]
+tmpCasesUS <-  csse_us_cases[, c("iso3", "12/31/21")]
+names(tmpCasesGlobal) <- names(tmpCasesUS)
 
+cases_csse_dec21 <- rbind(tmpCasesGlobal, tmpCasesUS) %>%
+  group_by(iso3) %>%
+  summarise(across(everything(), ~ sum(.x))) %>%
+  rename(total_cases = "12/31/21", country = "iso3")
+
+# Tidying up US and global total number for "Deaths"
+tmpDeathsGlobal <- csse_global_deaths[, c("Country/Region", "12/31/21")]
+tmpDeathsUS <-  csse_us_deaths[, c("iso3", "12/31/21")]
+names(tmpDeathsGlobal) <- names(tmpDeathsUS)
+
+deaths_csse_dec21 <- rbind(tmpDeathsGlobal, tmpDeathsUS) %>%
+  group_by(iso3) %>%
+  summarise(across(everything(), ~ sum(.x))) %>%
+  rename(total_deaths = "12/31/21", country = "iso3")
 ```
 
--- Communicate your methodology, results, and interpretation here -- 
+Top 10 countries with most deaths per 100k population until Dec 2021:
+```{r}
+total_deaths <- inner_join(deaths_csse_dec21, globabl_population_estimates[, c(1,6)], by = c("country" = "Country Name")) %>%
+  rename(pop = "2021 [YR2021]") %>%
+  mutate(deaths_per100k = 100000 * (total_deaths / as.double(pop))) %>%
+  na.omit() %>%
+  arrange(desc(deaths_per100k))
+
+total_deaths
+```
+
+Top 10 countries with most cases per 100k population until Dec 2021:
+```{r}
+total_cases <- inner_join(cases_csse_dec21, globabl_population_estimates[, c(1,6)], by = c("country" = "Country Name")) %>%
+  rename(pop = "2021 [YR2021]") %>%
+  mutate(cases_per100k = 100000 * (total_cases / as.double(pop))) %>%
+  na.omit() %>%
+  arrange(desc(cases_per100k))
+
+total_cases
+```
+By integrating cases / deaths data with population data we can find countries with most cases or deaths due to covid19, per 100,000 population. e.g. Peru is the highest deaths and Andorra is highest cases found. Which might either indicate the severity of the pandemic situation in these countries, OR suggest that they had a better system diagnosing and recording their cases and deaths.
 
 ##### Question 3
 
 Construct a visualization plotting the 10 countries in terms of deaths and cases per 100,000 people between March 15, 2020, and December 31, 2021. In designing your visualization keep the number of data you will be plotting in mind. You may wish to create two separate visualizations, one for deaths and another for cases. 
 
 ```{r p3q3-response}
-
+total_cases %>%
+  slice_head(n = 10) %>%
+  ggplot(aes(x = factor(country, levels = country), y = cases_per100k)) + geom_bar(stat = "identity")
 ```
 
--- Communicate your methodology, results, and interpretation here -- 
+```{r p3q3-response-1}
+total_deaths %>%
+  slice_head(n = 10) %>%
+  ggplot(aes(x = factor(country, levels = country), y = deaths_per100k)) + geom_bar(stat = "identity")
+```
+Barplots were chosen to showcase the number of cases and deaths and to easily compare the countries. The bars were sorted from highest to lowest, instead of alphabetically.
 
 ##### Question 4
 
@@ -535,6 +587,35 @@ Finally, select four countries from one continent and create visualizations for 
 
 ```{r p3q4-response}
 
+csse_global_cases %>% 
+  rename(country = 'Country/Region') %>%
+  filter(country %in% c("Iraq", "Japan", "Malaysia", "Vietnam")) %>%
+  pivot_longer(cols = -c(1:4), names_to = "date", values_to = "total_cases") %>%
+  select(country, date, total_cases) %>%
+  mutate(date = base::as.Date(date, "%m/%d/%y")) %>%
+  filter(date > base::as.Date("2020-03-14") & date < base::as.Date("2022-01-01")) %>%
+  left_join(globabl_population_estimates[, c(1,5,6)], by = c("country" = "Country Name")) %>%
+  group_by(country) %>%
+  mutate(daily_cases = total_cases - lag(total_cases, 1)) %>%
+  mutate(daily_cases_per100k = case_when(date < base::as.Date("2021-01-01") ~ 100000 * (daily_cases/as.double(`2020 [YR2020]`)),
+                                   date >= base::as.Date("2021-01-01") ~ 100000 * (daily_cases/as.double(`2021 [YR2021]`)))) %>%
+  ggplot(aes(x = date, y = daily_cases_per100k, color = country)) + geom_line()
 ```
 
--- Communicate your methodology, results, and interpretation here -- 
+```{r p3q4-response-1}
+
+csse_global_deaths %>% 
+  rename(country = 'Country/Region') %>%
+  filter(country %in% c("Iraq", "Japan", "Malaysia", "Vietnam")) %>%
+  pivot_longer(cols = -c(1:4), names_to = "date", values_to = "total_deaths") %>%
+  select(country, date, total_deaths) %>%
+  mutate(date = base::as.Date(date, "%m/%d/%y")) %>%
+  filter(date > base::as.Date("2020-03-14") & date < base::as.Date("2022-01-01")) %>%
+  left_join(globabl_population_estimates[, c(1,5,6)], by = c("country" = "Country Name")) %>%
+  group_by(country) %>%
+  mutate(daily_deaths = total_deaths - lag(total_deaths, 1)) %>%
+  mutate(daily_deaths_per100k = case_when(date < base::as.Date("2021-01-01") ~ 100000 * (daily_deaths/as.double(`2020 [YR2020]`)),
+                                   date >= base::as.Date("2021-01-01") ~ 100000 * (daily_deaths/as.double(`2021 [YR2021]`)))) %>%
+  ggplot(aes(x = date, y = daily_deaths_per100k, color = country)) + geom_line()
+```
+We selected four countries in Asia: Iraq, Japan, Malaysia and Vietnam. They show different patterns for the daily number of cases and deaths among themselves for example we see the pandemic started sooner in Iraq, and overall Japan has a much lower number for both parameters comparing to the rest.
