@@ -1,5 +1,5 @@
 ---
-title: "COVID 19 Analysis -- Part 1"
+title: "COVID 19 Analysis"
 author: "Meisam Yousefi"
 date: "2023-03-06"
 output:
